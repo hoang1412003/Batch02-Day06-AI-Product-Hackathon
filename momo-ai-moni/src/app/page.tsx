@@ -79,10 +79,10 @@ export default function Home() {
           </div>
           <span>Quét mọi QR</span>
         </div>
-        <div className={styles.navItem}>
+        <Link href="/history" className={styles.navItem} style={{ textDecoration: 'none', color: 'inherit' }}>
           <span style={{ fontSize: '20px' }}>🕒</span>
           <span>Lịch sử GD</span>
-        </div>
+        </Link>
         <div className={styles.navItem}>
           <span style={{ fontSize: '20px' }}>👤</span>
           <span>Tôi</span>
