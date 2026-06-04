@@ -1,12 +1,31 @@
 "use client";
 
+import { useState, useEffect } from 'react';
 import Link from 'next/link';
-import { mockTransactions } from '@/mock/database';
 import styles from './History.module.css';
 
 export default function HistoryPage() {
+  const [transactions, setTransactions] = useState<any[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+
+  useEffect(() => {
+    // Fetch dữ liệu từ Backend Python
+    fetch('http://127.0.0.1:8000/api/transactions')
+      .then((res) => res.json())
+      .then((data) => {
+        if (data && data.data) {
+          setTransactions(data.data);
+        }
+        setIsLoading(false);
+      })
+      .catch((err) => {
+        console.error("Failed to fetch transactions:", err);
+        setIsLoading(false);
+      });
+  }, []);
+
   // Tính tổng chi tiêu
-  const totalExpense = mockTransactions.reduce((sum, t) => sum + t.amount, 0);
+  const totalExpense = transactions.reduce((sum, t) => sum + (t.amount || 0), 0);
 
   // Format tiền tệ
   const formatMoney = (amount: number) => {
@@ -15,7 +34,7 @@ export default function HistoryPage() {
 
   // Hàm chọn icon dựa vào từ khóa trong description
   const getIcon = (desc: string) => {
-    const text = desc.toLowerCase();
+    const text = (desc || '').toLowerCase();
     if (text.includes('thuê phòng') || text.includes('điện') || text.includes('internet')) return '🏠';
     if (text.includes('ăn') || text.includes('cà phê') || text.includes('nước')) return '🍔';
     if (text.includes('siêu thị') || text.includes('mua') || text.includes('shopee')) return '🛒';
@@ -26,7 +45,18 @@ export default function HistoryPage() {
   };
 
   // Đảo ngược danh sách để giao dịch mới nhất (id lớn) lên đầu
-  const sortedTransactions = [...mockTransactions].reverse();
+  const sortedTransactions = [...transactions].reverse();
+
+  if (isLoading) {
+    return (
+      <div className={styles.container}>
+        <div className={styles.header}>
+          <h1>Lịch sử giao dịch</h1>
+          <p>Đang tải dữ liệu...</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className={styles.container}>
@@ -36,7 +66,7 @@ export default function HistoryPage() {
           <span>📶 🔋</span>
         </div>
       </div>
-      
+
       <div className={styles.searchSection}>
         <div className={styles.searchBar}>
           <span className={styles.searchIcon}>🔍</span>
@@ -59,7 +89,7 @@ export default function HistoryPage() {
           </div>
           <div className={styles.statBox}>
             <div className={styles.statLabel}>So với cùng kỳ</div>
-            <div className={styles.statValue} style={{color: 'var(--text-secondary)'}}>-- Không đổi ›</div>
+            <div className={styles.statValue} style={{ color: 'var(--text-secondary)' }}>-- Không đổi ›</div>
           </div>
         </div>
         <div className={styles.budgetWarning}>
@@ -68,25 +98,25 @@ export default function HistoryPage() {
             <div className={styles.budgetTitle}>Ngân sách Ăn uống</div>
             <div className={styles.budgetStatus}>Đang ổn định</div>
           </div>
-          <div style={{marginLeft: 'auto'}}>›</div>
+          <div style={{ marginLeft: 'auto' }}>›</div>
         </div>
       </div>
 
       <div className={styles.transactionsSection}>
         <div className={styles.sectionTitle}>Giao dịch gần đây</div>
-        
+
         <div className={styles.monthGroup}>
           <div className={styles.monthTitle}>Tháng 6/2026</div>
-          
+
           {sortedTransactions.map(t => (
             <div key={t.id} className={styles.transactionItem}>
               <div className={styles.transactionIcon}>{getIcon(t.description)}</div>
               <div className={styles.transactionInfo}>
                 <div className={styles.transactionTitle}>
-                  {t.recipient.includes('Thanh toán') || t.recipient.includes('Chuyển tiền') || t.recipient.includes('Mua') ? t.recipient : `Thanh toán ${t.recipient}`}
+                  {t.recipient?.includes('Thanh toán') || t.recipient?.includes('Chuyển tiền') || t.recipient?.includes('Mua') ? t.recipient : `Thanh toán ${t.recipient}`}
                 </div>
                 <div className={styles.transactionTime}>
-                  {t.date.split('-').reverse().join('/')} - {t.description}
+                  {t.date?.split('-').reverse().join('/')} - {t.description}
                 </div>
                 <div className={`${styles.categoryTag} ${!t.category ? styles.empty : ''}`}>
                   📋 {t.category || 'Chưa phân loại'}
