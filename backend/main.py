@@ -5,6 +5,7 @@ from pydantic import BaseModel
 from dotenv import load_dotenv
 
 from agent import MoniAgent
+from database import mock_transactions
 
 load_dotenv()
 
@@ -27,15 +28,26 @@ class ChatRequest(BaseModel):
     messages: list[Message]
     permissionGranted: bool = False
 
+@app.get("/api/transactions")
+async def get_transactions():
+    return {"data": mock_transactions}
+
 @app.post("/api/chat")
 async def chat_endpoint(request: ChatRequest):
+    provider = os.getenv("DEFAULT_PROVIDER", "google").lower()
     api_key = os.getenv("GOOGLE_API_KEY")
-    if not api_key:
+    groq_api_key = os.getenv("GROQ_API_KEY")
+    
+    if provider == "google" and not api_key:
         print("Warning: GOOGLE_API_KEY is not set. Returning mock response.")
         return {"content": "Vui lòng thiết lập biến môi trường GOOGLE_API_KEY trong tệp .env."}
         
+    if provider == "groq" and not groq_api_key:
+        print("Warning: GROQ_API_KEY is not set. Returning mock response.")
+        return {"content": "Vui lòng thiết lập biến môi trường GROQ_API_KEY trong tệp .env."}
+        
     try:
-        agent = MoniAgent(api_key=api_key)
+        agent = MoniAgent(api_key=api_key, groq_api_key=groq_api_key)
         # Convert pydantic models to dict list
         messages_dict = [{"role": msg.role, "content": msg.content} for msg in request.messages]
         
@@ -43,7 +55,7 @@ async def chat_endpoint(request: ChatRequest):
         return {"content": response_text}
     except Exception as e:
         print(f"API Error: {str(e)}")
-        raise HTTPException(status_code=500, detail="Có lỗi xảy ra từ máy chủ backend Python.")
+        raise HTTPException(status_code=500, detail=f"Có lỗi xảy ra từ máy chủ backend Python: {str(e)}")
 
 if __name__ == "__main__":
     import uvicorn

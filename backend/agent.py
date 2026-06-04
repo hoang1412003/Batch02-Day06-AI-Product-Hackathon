@@ -1,19 +1,39 @@
 import os
 import json
 import re
-from google import genai
-from google.genai import types
 from database import mock_transactions
+import logging
 
 class MoniAgent:
-    def __init__(self, api_key: str):
-        # Initialize Google GenAI client
-        self.client = genai.Client(api_key=api_key)
-        self.model_name = 'gemini-2.5-flash' # Using genai SDK, 2.5-flash is standard.
+    def __init__(self, api_key: str = None, groq_api_key: str = None):
+        self.provider = os.getenv("DEFAULT_PROVIDER", "google").lower()
+        self.log_level = os.getenv("LOG_LEVEL", "INFO")
+        logging.basicConfig(level=getattr(logging, self.log_level))
+        
+        if self.provider == "local":
+            logging.info("Initializing Local LLM (Llama-cpp)")
+            from llama_cpp import Llama
+            model_path = os.getenv("LOCAL_MODEL_PATH", "./models/Phi-3-mini-4k-instruct-q4.gguf")
+            if not os.path.exists(model_path):
+                raise FileNotFoundError(f"Local model not found at {model_path}")
+            self.llm = Llama(model_path=model_path, n_ctx=2048, verbose=False)
+        elif self.provider == "groq":
+            logging.info("Initializing Groq")
+            from groq import Groq
+            if not groq_api_key:
+                raise ValueError("GROQ_API_KEY is required for groq provider")
+            self.groq_client = Groq(api_key=groq_api_key)
+            self.groq_model = os.getenv("GROQ_MODEL", "llama3-8b-8192")
+        else:
+            logging.info("Initializing Google Gemini")
+            from google import genai
+            if not api_key:
+                raise ValueError("GOOGLE_API_KEY is required for google provider")
+            self.client = genai.Client(api_key=api_key)
+            self.model_name = 'gemini-2.5-flash'
 
     def extract_keywords(self, query: str) -> list[str]:
         stop_words = ['tôi', 'bạn', 'là', 'có', 'không', 'và', 'hoặc', 'cho', 'của', 'vừa', 'mới']
-        # remove punctuation and lowercase
         query = re.sub(r'[^\w\s\u00C0-\u1EF9]', '', query.lower())
         words = query.split()
         return [word for word in words if len(word) > 1 and word not in stop_words]
@@ -32,12 +52,10 @@ class MoniAgent:
                 if kw in tx_text:
                     score += 1
                     
-            # Add a small weight based on ID
             score += int(tx.get('id', '0')) * 0.001
             scored_transactions.append((tx, score))
             
         relevant = [item[0] for item in scored_transactions if item[1] >= 1]
-        # Sort by score descending
         relevant.sort(key=lambda x: next((item[1] for item in scored_transactions if item[0] == x), 0), reverse=True)
         
         if not relevant:
@@ -46,14 +64,6 @@ class MoniAgent:
         return relevant[:max_results]
 
     def generate_response(self, messages: list[dict], permission_granted: bool) -> str:
-        # Convert messages to format supported by SDK
-        formatted_contents = []
-        for m in messages:
-            role = 'model' if m.get('role') == 'assistant' else 'user'
-            formatted_contents.append(
-                types.Content(role=role, parts=[types.Part.from_text(text=m.get('content', ''))])
-            )
-            
         last_user_message = next((m for m in reversed(messages) if m.get('role') == 'user'), None)
         query = last_user_message.get('content', '') if last_user_message else ''
         
@@ -64,25 +74,58 @@ class MoniAgent:
             
         system_instruction = f"""Bạn là Moni, trợ lý AI quản lý tài chính cá nhân trên ứng dụng MoMo. Hãy trả lời ngắn gọn, thân thiện, xưng 'mình' và gọi 'bạn'.
 
-LUẬT 1 - QUYỀN TRUY CẬP DỮ LIỆU (CORRECTION PATH 3):
-- Trạng thái quyền truy cập dữ liệu giao dịch hiện tại của bạn là: {'ĐÃ ĐƯỢC CẤP' if permission_granted else 'CHƯA ĐƯỢC CẤP'}.
-- Nếu user hỏi về lịch sử giao dịch, tổng chi tiêu, hoặc các số liệu tài chính:
-  + Nếu CHƯA ĐƯỢC CẤP quyền: Bạn tuyệt đối KHÔNG ĐƯỢC bịa số liệu (không được trả lời là 0đ). Bạn PHẢI trả lời rằng bạn cần quyền truy cập và BẮT BUỘC thêm chuỗi `<<PERMISSION_REQUEST>>` vào cuối câu trả lời.
-  + Nếu ĐÃ ĐƯỢC CẤP quyền: Dưới đây là dữ liệu chi tiêu (đóng vai trò như database) có liên quan nhất đến câu hỏi của user:
+LUẬT 1 - QUYỀN TRUY CẬP DỮ LIỆU:
+- Trạng thái quyền: {'ĐÃ ĐƯỢC CẤP' if permission_granted else 'CHƯA ĐƯỢC CẤP'}.
+- Nếu user hỏi về lịch sử giao dịch:
+  + Nếu CHƯA ĐƯỢC CẤP: Không được bịa số liệu. Phải yêu cầu quyền và THÊM `<<PERMISSION_REQUEST>>` vào cuối câu.
+  + Nếu ĐÃ ĐƯỢC CẤP: Dưới đây là database:
     {context_data}
-    Hãy truy vấn database ảo này, tính toán và liệt kê chi tiết một cách chính xác dựa trên sự thật đó.
+    Hãy dựa vào đây để trả lời.
 
-LUẬT 2 - GỢI Ý PHÂN LOẠI CHI TIÊU (CORRECTION PATH 1):
-- Khi user khai báo một khoản chi tiêu mới (ví dụ: 'tôi vừa tiêu 50k ăn phở'), bạn KHÔNG ĐƯỢC tự động chốt danh mục phân loại.
-- Bạn phải hỏi lại user để xác nhận, và BẮT BUỘC thêm chuỗi `<<CLASSIFY_SUGGESTION>> {{"suggestions": ["Danh mục 1", "Danh mục 2", "Danh mục 3"]}}` vào cuối câu. Suy luận 3 danh mục phù hợp nhất với khoản chi đó."""
+LUẬT 2 - GỢI Ý PHÂN LOẠI:
+- Khi user khai báo khoản chi, KHÔNG tự chốt danh mục.
+- Hỏi lại user và THÊM `<<CLASSIFY_SUGGESTION>> {{"suggestions": ["Danh mục 1", "Danh mục 2", "Danh mục 3"]}}` vào cuối câu."""
 
-        response = self.client.models.generate_content(
-            model=self.model_name,
-            contents=formatted_contents,
-            config=types.GenerateContentConfig(
-                system_instruction=system_instruction,
-                temperature=0.2
+        if self.provider == "local":
+            formatted_messages = [{"role": "system", "content": system_instruction}]
+            for m in messages:
+                formatted_messages.append({"role": m.get("role", "user"), "content": m.get("content", "")})
+            
+            response = self.llm.create_chat_completion(
+                messages=formatted_messages,
+                temperature=0.2,
+                max_tokens=512
             )
-        )
-        
-        return response.text
+            return response["choices"][0]["message"]["content"]
+            
+        elif self.provider == "groq":
+            formatted_messages = [{"role": "system", "content": system_instruction}]
+            for m in messages:
+                formatted_messages.append({"role": m.get("role", "user"), "content": m.get("content", "")})
+                
+            response = self.groq_client.chat.completions.create(
+                messages=formatted_messages,
+                model=self.groq_model,
+                temperature=0.2,
+                max_tokens=512
+            )
+            return response.choices[0].message.content
+            
+        else:
+            from google.genai import types
+            formatted_contents = []
+            for m in messages:
+                role = 'model' if m.get('role') == 'assistant' else 'user'
+                formatted_contents.append(
+                    types.Content(role=role, parts=[types.Part.from_text(text=m.get('content', ''))])
+                )
+                
+            response = self.client.models.generate_content(
+                model=self.model_name,
+                contents=formatted_contents,
+                config=types.GenerateContentConfig(
+                    system_instruction=system_instruction,
+                    temperature=0.2
+                )
+            )
+            return response.text
