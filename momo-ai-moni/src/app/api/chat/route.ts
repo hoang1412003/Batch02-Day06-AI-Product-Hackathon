@@ -1,5 +1,6 @@
 import { GoogleGenAI } from '@google/genai';
 import { NextResponse } from 'next/server';
+import { mockTransactions } from '@/mock/database';
 
 const apiKey = process.env.GOOGLE_API_KEY;
 
@@ -12,52 +13,35 @@ export async function POST(req: Request) {
 
     const { messages, permissionGranted } = await req.json();
 
-    // Lấy tin nhắn cuối cùng của user
-    const lastMessage = messages[messages.length - 1]?.content.toLowerCase();
-
-    // ---- THỰC HIỆN CORRECTION PATHS (MOCK LOGIC Ở BACKEND) ----
-
-    // Correction Path 3: Kiểm tra quyền truy cập dữ liệu chi tiêu
-    if (lastMessage.includes('tổng chi') || lastMessage.includes('chi tiêu tháng này')) {
-      if (!permissionGranted) {
-        // AI không tự bịa số liệu, yêu cầu quyền
-        return NextResponse.json({
-          content: "Để tính toán chính xác tổng chi tiêu của bạn, tôi cần quyền truy cập vào dữ liệu giao dịch trong ví MoMo của bạn. <<PERMISSION_REQUEST>>"
-        });
-      } else {
-        // Đã cấp quyền, trả về dữ liệu thật (mock data)
-        return NextResponse.json({
-          content: "Tổng chi tiêu của bạn trong tháng này là **120.000đ** (Gồm: Mua gói Google Pro, Thanh toán tiền điện)."
-        });
-      }
-    }
-
-    // Correction Path 1: Gợi ý phân loại thay vì tự áp đặt
-    // Nếu user nhập một giao dịch (ví dụ: Vừa thanh toán 50k ăn phở)
-    if (lastMessage.includes('thanh toán') || lastMessage.includes('mua') || lastMessage.includes('ăn')) {
-      return NextResponse.json({
-        content: `Tôi thấy bạn vừa có một khoản chi tiêu mới. Bạn muốn phân loại khoản này vào đâu để tôi ghi nhận? <<CLASSIFY_SUGGESTION>> {"suggestions": ["Ăn uống", "Mua sắm", "Đi lại"]}`
-      });
-    }
-
-    // Nếu không thuộc các luồng đặc biệt, gọi Google GenAI thật
     const ai = new GoogleGenAI({ apiKey: apiKey });
     
-    // Khởi tạo chat session (đơn giản hóa bằng cách gửi toàn bộ history)
+    // Khởi tạo chat session
     const formattedMessages = messages.map((m: any) => ({
       role: m.role === 'assistant' ? 'model' : 'user',
       parts: [{ text: m.content }]
     }));
 
-    // System instruction: Đóng vai Moni
-    const systemInstruction = "Bạn là Moni, trợ lý AI quản lý tài chính cá nhân trên ứng dụng MoMo. Hãy trả lời ngắn gọn, thân thiện, xưng 'mình' và gọi 'bạn'.";
+    // System instruction: Đóng vai Moni và xử lý các luật UX
+    const systemInstruction = `Bạn là Moni, trợ lý AI quản lý tài chính cá nhân trên ứng dụng MoMo. Hãy trả lời ngắn gọn, thân thiện, xưng 'mình' và gọi 'bạn'.
+
+LUẬT 1 - QUYỀN TRUY CẬP DỮ LIỆU (CORRECTION PATH 3):
+- Trạng thái quyền truy cập dữ liệu giao dịch hiện tại của bạn là: ${permissionGranted ? 'ĐÃ ĐƯỢC CẤP' : 'CHƯA ĐƯỢC CẤP'}.
+- Nếu user hỏi về lịch sử giao dịch, tổng chi tiêu, hoặc các số liệu tài chính:
+  + Nếu CHƯA ĐƯỢC CẤP quyền: Bạn tuyệt đối KHÔNG ĐƯỢC bịa số liệu (không được trả lời là 0đ). Bạn PHẢI trả lời rằng bạn cần quyền truy cập và BẮT BUỘC thêm chuỗi \`<<PERMISSION_REQUEST>>\` vào cuối câu trả lời.
+  + Nếu ĐÃ ĐƯỢC CẤP quyền: Dưới đây là dữ liệu chi tiêu (đóng vai trò như database) của user:
+    ${JSON.stringify(mockTransactions)}
+    Hãy truy vấn database ảo này, tính toán và liệt kê chi tiết một cách chính xác dựa trên sự thật đó.
+
+LUẬT 2 - GỢI Ý PHÂN LOẠI CHI TIÊU (CORRECTION PATH 1):
+- Khi user khai báo một khoản chi tiêu mới (ví dụ: 'tôi vừa tiêu 50k ăn phở'), bạn KHÔNG ĐƯỢC tự động chốt danh mục phân loại.
+- Bạn phải hỏi lại user để xác nhận, và BẮT BUỘC thêm chuỗi \`<<CLASSIFY_SUGGESTION>> {"suggestions": ["Danh mục 1", "Danh mục 2", "Danh mục 3"]}\` vào cuối câu. Suy luận 3 danh mục phù hợp nhất với khoản chi đó.`;
 
     const response = await ai.models.generateContent({
       model: 'gemini-3.5-flash',
       contents: formattedMessages,
       config: {
         systemInstruction,
-        temperature: 0.7,
+        temperature: 0.2, 
       }
     });
 
@@ -65,7 +49,6 @@ export async function POST(req: Request) {
 
   } catch (error: any) {
     console.error('API Error:', error);
-    // Fallback error or version mismatch (e.g. gemini-3.5-flash doesn't exist yet)
     if (error.message?.includes('not found') || error.message?.includes('model')) {
         return NextResponse.json({ content: "Lỗi: Model gemini-3.5-flash không tồn tại hoặc chưa được hỗ trợ. Vui lòng kiểm tra lại cấu hình model." }, { status: 500 });
     }

@@ -34,9 +34,12 @@ function ChatContent() {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
+  const initialized = useRef(false);
+
   // Handle initial prompt from shortcut
   useEffect(() => {
-    if (initialPrompt) {
+    if (initialPrompt && !initialized.current) {
+      initialized.current = true;
       handleSendMessage(initialPrompt);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
