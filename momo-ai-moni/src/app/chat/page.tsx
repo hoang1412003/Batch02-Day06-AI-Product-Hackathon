@@ -64,6 +64,10 @@ function ChatContent() {
       
       const data = await res.json();
       
+      if (!res.ok || typeof data.content !== 'string') {
+        throw new Error(data.detail || 'Lỗi từ máy chủ backend (Không có content)');
+      }
+
       // Parse custom UI responses (Correction Paths)
       let uiType: Message['uiType'] = 'none';
       let uiData = null;
